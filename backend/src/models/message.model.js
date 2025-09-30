@@ -14,9 +14,18 @@ const messageSchema = new mongoose.Schema(
     },
     text: {
       type: String,
+      required: true,
     },
-    image: {
+    iv: {
       type: String,
+    },
+    tag: {
+      type: String,
+    },
+    isFlagged: {
+      type: Boolean,
+      required: true,
+      default: false,
     },
   },
   { timestamps: true }
