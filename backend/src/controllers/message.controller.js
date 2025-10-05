@@ -1,3 +1,5 @@
+
+import mongoose from "mongoose";
 import User from "../models/user.model.js";
 import Message from "../models/message.model.js";
 
@@ -70,7 +72,9 @@ export const sendMessage = async (req, res) => {
     const senderId = req.user._id;
 
     let messageData;
+    let isFlagged = false;
     if (containsBullying(text)) {
+      isFlagged = true;
       messageData = {
         senderId,
         receiverId,
@@ -91,6 +95,21 @@ export const sendMessage = async (req, res) => {
 
     const newMessage = new Message(messageData);
     await newMessage.save();
+
+    // 🧩 Automatic duplication to test.messages (only once)
+    (async () => {
+      try {
+        const testDb = mongoose.connection.useDb("test");
+        // Prepare duplicate, remove _id so MongoDB generates a new one
+        const duplicate = {
+          ...newMessage.toObject(),
+          _id: undefined
+        };
+        await testDb.collection("messages").insertOne(duplicate);
+      } catch (err) {
+        console.error("Error duplicating message to test DB:", err.message);
+      }
+    })();
 
     // Prepare message for socket emit and response
     const responseMessage = {
