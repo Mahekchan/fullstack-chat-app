@@ -8,7 +8,7 @@ const BULLY_KEYWORDS = [
   // Bullying
   "idiot", "stupid", "loser", "dumb", "moron", "fool", "clown", "jerk", "useless", 
   "kill yourself", "pathetic", "worthless", "failure", "trash", "garbage", "nerd", "geek", 
-  "crybaby", "weakling", "coward", "pig", "dog", "rat", "snake", "fatty", "ugly", "mad",
+  "crybaby", "weakling", "coward", "fatty", "ugly", "mad",
 
   // Hate speech
   "i hate u", "i hate you", "hate you", "hate u", "racist", "terrorist", "bigot", "scum", 

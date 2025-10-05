@@ -27,6 +27,11 @@ const messageSchema = new mongoose.Schema(
       required: true,
       default: false,
     },
+    severity: {
+      type: String,
+      enum: ["High", "Medium", "Low"],
+      default: "Low",
+    },
   },
   { timestamps: true }
 );

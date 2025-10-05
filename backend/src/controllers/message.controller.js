@@ -73,15 +73,56 @@ export const sendMessage = async (req, res) => {
 
     let messageData;
     let isFlagged = false;
-    if (containsBullying(text)) {
-      isFlagged = true;
+    let severity = "Low";
+    const lower = text.toLowerCase();
+    // High severity: threats, hate speech, suicide, violence
+    const highKeywords = [
+      "kill", "dead", "die", "suicide", "hurt", "smash", "beat", "terrorist", "racist", "slave", "nazi", "hitler", "hate", "drop dead", "go die", "watch your back", "regret", "break your face", "break you", "smash your head", "beat you up",
+      // Threats
+      "i will hurt you", "i will kill you", "kill your self", "watch your back", "you'll regret this",
+      "you're dead", "i'll beat you", "i'll smash you", "break your face",
+      "i'll break you", "beat you up", "smash your head",
+            // Hate speech: religion
+      "islamophobe", "muslim terrorist", "fake jew", "christfag", "catholic dog",
+      "infidel", "heathen scum",
+    ];
+    // Medium severity: insults, profanity, harassment, body shaming
+    const mediumKeywords = [
+      "idiot", "stupid", "loser", "dumb", "moron", "fool", "clown", "jerk", "useless", "pathetic", "worthless", "failure", "trash", "garbage", "crybaby", "weakling", "coward", "pig", "dog", "rat", "snake", "fatty", "ugly", "mad", "obese", "disgusting", "gross", "fatso", "skinny", "toothpick", "stick", "string bean", "bony", "skeleton", "brain dead", "slow", "retard", "retarded", "dimwit", "halfwit", "simpleton", "pea brain", "empty head", "blockhead", "airhead", "bitch", "bastard", "asshole", "dick", "prick", "slut", "whore", "hoe", "tramp", "skank", "scumbag", "jackass", "punk", "douche", "douchebag"
+      // Profanity / derogatory terms
+      ,"bitch", "bastard", "asshole", "dick", "prick", "slut", "whore", "hoe",
+      "tramp", "skank", "scumbag", "jackass", "punk", "douche", "douchebag",
+    ];
+    // Low severity: school-specific, mild teasing, annoying
+    const lowKeywords = [
+      "nerd", "geek", "teacher's pet", "loser face", "four eyes", "know-it-all", "brown noser", "tattletale", "crybaby", "mad", "annoying", "no one cares", "get lost", "go away forever"
+        // Bullying
+      ,"idiot", "stupid", "loser", "dumb", "moron", "fool", "clown", "jerk", "useless", 
+      "kill yourself", "pathetic", "worthless", "failure", "trash", "garbage", "nerd", "geek", 
+      "crybaby", "weakling", "coward", "fatty", "ugly", "mad",
+    ];
+
+    // Check for severity and flag only if keyword matches
+    let matchedSeverity = null;
+    if (highKeywords.some(word => lower.includes(word))) {
+      matchedSeverity = "High";
+    } else if (mediumKeywords.some(word => lower.includes(word))) {
+      matchedSeverity = "Medium";
+    } else if (lowKeywords.some(word => lower.includes(word))) {
+      matchedSeverity = "Low";
+    }
+
+    if (matchedSeverity) {
+      // Store flagged (bully) message as plaintext
       messageData = {
         senderId,
         receiverId,
         text,
         isFlagged: true,
+        severity: matchedSeverity,
       };
     } else {
+      // Store normal message as encrypted
       const { ciphertext, iv, tag } = encryptMessage(text);
       messageData = {
         senderId,
@@ -90,6 +131,7 @@ export const sendMessage = async (req, res) => {
         iv,
         tag,
         isFlagged: false,
+        severity: "Low",
       };
     }
 
