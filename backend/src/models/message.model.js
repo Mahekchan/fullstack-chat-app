@@ -10,8 +10,20 @@ const messageSchema = new mongoose.Schema(
     receiverId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true,
+      // optional for group messages
     },
+    groupId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Group",
+    },
+    deliveredTo: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    }],
+    readBy: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    }],
     text: {
       type: String,
       required: true,

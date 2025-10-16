@@ -1,6 +1,7 @@
 
 import mongoose from "mongoose";
 import User from "../models/user.model.js";
+import Group from "../models/group.model.js";
 import Message from "../models/message.model.js";
 
 import { getReceiverSocketId, io } from "../lib/socket.js";
@@ -23,15 +24,22 @@ export const getMessages = async (req, res) => {
     const { id: userToChatId } = req.params;
     const myId = req.user._id;
 
-    const messages = await Message.find({
-      $or: [
-        { senderId: myId, receiverId: userToChatId },
-        { senderId: userToChatId, receiverId: myId },
-      ],
-    });
+    // If the id is a group id, return group messages
+    const group = await Group.findById(userToChatId);
+    let messages;
+    if (group) {
+      messages = await Message.find({ groupId: userToChatId });
+    } else {
+      messages = await Message.find({
+        $or: [
+          { senderId: myId, receiverId: userToChatId },
+          { senderId: userToChatId, receiverId: myId },
+        ],
+      });
+    }
 
     // Decrypt or send plain text based on isFlagged
-    const result = messages.map(msg => {
+    const result = await Promise.all(messages.map(async (msg) => {
       let text;
       if (msg.isFlagged) {
         text = msg.text;
@@ -46,19 +54,24 @@ export const getMessages = async (req, res) => {
           }
         }
       }
+      const senderInfo = await User.findById(msg.senderId).select("fullName profilePic");
+
       return {
         _id: msg._id,
         senderId: msg.senderId,
+        senderName: senderInfo?.fullName,
+        senderProfilePic: senderInfo?.profilePic,
         receiverId: msg.receiverId,
+        groupId: msg.groupId,
         text,
         isFlagged: msg.isFlagged,
         createdAt: msg.createdAt,
         updatedAt: msg.updatedAt,
         __v: msg.__v,
       };
-    });
+  }));
 
-    res.status(200).json(result);
+  res.status(200).json(result);
   } catch (error) {
     console.log("Error in getMessages controller: ", error.message);
     res.status(500).json({ error: "Internal server error" });
@@ -67,7 +80,7 @@ export const getMessages = async (req, res) => {
 
 export const sendMessage = async (req, res) => {
   try {
-    const { text } = req.body;
+    const { text, groupId } = req.body;
     const { id: receiverId } = req.params;
     const senderId = req.user._id;
 
@@ -117,6 +130,7 @@ export const sendMessage = async (req, res) => {
       messageData = {
         senderId,
         receiverId,
+        groupId: groupId || undefined,
         text,
         isFlagged: true,
         severity: matchedSeverity,
@@ -127,6 +141,7 @@ export const sendMessage = async (req, res) => {
       messageData = {
         senderId,
         receiverId,
+        groupId: groupId || undefined,
         text: ciphertext,
         iv,
         tag,
@@ -135,8 +150,11 @@ export const sendMessage = async (req, res) => {
       };
     }
 
-    const newMessage = new Message(messageData);
-    await newMessage.save();
+  const newMessage = new Message(messageData);
+  await newMessage.save();
+
+  // populate sender info for response/emit
+  const sender = await User.findById(senderId).select("fullName profilePic");
 
     // 🧩 Automatic duplication to test.messages (only once)
     (async () => {
@@ -157,7 +175,10 @@ export const sendMessage = async (req, res) => {
     const responseMessage = {
       _id: newMessage._id,
       senderId: newMessage.senderId,
+      senderName: sender?.fullName,
+      senderProfilePic: sender?.profilePic,
       receiverId: newMessage.receiverId,
+      groupId: newMessage.groupId,
       text: messageData.isFlagged ? text : text,
       isFlagged: messageData.isFlagged,
       createdAt: newMessage.createdAt,
@@ -165,14 +186,82 @@ export const sendMessage = async (req, res) => {
       __v: newMessage.__v,
     };
 
-    const receiverSocketId = getReceiverSocketId(receiverId);
-    if (receiverSocketId) {
-      io.to(receiverSocketId).emit("newMessage", responseMessage);
+    // If it's a group message, emit to all group members (except sender)
+    // Track delivered receipts and emit newMessage events
+    if (groupId) {
+      const group = await Group.findById(groupId).select("members");
+      if (group && group.members && group.members.length) {
+        const delivered = [];
+        for (const memberId of group.members) {
+          if (memberId.toString() === senderId.toString()) continue;
+          const socketId = getReceiverSocketId(memberId.toString());
+          if (socketId) {
+            io.to(socketId).emit("newMessage", { ...responseMessage, groupId });
+            delivered.push(memberId);
+          }
+        }
+        // update deliveredTo on message
+        if (delivered.length) {
+          await Message.findByIdAndUpdate(newMessage._id, { $addToSet: { deliveredTo: { $each: delivered } } });
+        }
+      }
+    } else {
+      const receiverSocketId = getReceiverSocketId(receiverId);
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit("newMessage", responseMessage);
+        await Message.findByIdAndUpdate(newMessage._id, { $addToSet: { deliveredTo: receiverId } });
+      }
     }
 
     res.status(201).json(responseMessage);
   } catch (error) {
     console.log("Error in sendMessage controller: ", error.message);
     res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+export const markDelivered = async (req, res) => {
+  try {
+    const { id: messageId } = req.params;
+    const userId = req.user._id;
+
+    await Message.findByIdAndUpdate(messageId, { $addToSet: { deliveredTo: userId } });
+
+    // notify sender about delivery
+    const msg = await Message.findById(messageId);
+    if (msg) {
+      const senderSocket = getReceiverSocketId(msg.senderId.toString());
+      if (senderSocket) {
+        io.to(senderSocket).emit("messageDelivered", { messageId, userId });
+      }
+    }
+
+    res.status(200).json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok: false });
+  }
+};
+
+export const markRead = async (req, res) => {
+  try {
+    const { id: messageId } = req.params;
+    const userId = req.user._id;
+
+    await Message.findByIdAndUpdate(messageId, { $addToSet: { readBy: userId } });
+
+    // notify sender about read
+    const msg = await Message.findById(messageId);
+    if (msg) {
+      const senderSocket = getReceiverSocketId(msg.senderId.toString());
+      if (senderSocket) {
+        io.to(senderSocket).emit("messageRead", { messageId, userId });
+      }
+    }
+
+    res.status(200).json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok: false });
   }
 };

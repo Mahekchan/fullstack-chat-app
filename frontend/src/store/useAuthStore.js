@@ -1,3 +1,4 @@
+import React from "react";
 import { create } from "zustand";
 import { axiosInstance } from "../lib/axios.js";
 import toast from "react-hot-toast";
@@ -97,6 +98,48 @@ export const useAuthStore = create((set, get) => ({
 
     socket.on("getOnlineUsers", (userIds) => {
       set({ onlineUsers: userIds });
+    });
+
+    // When a new group is created and the server emits it, show a toast and add it to the group store
+    socket.on("newGroup", (group) => {
+      // Notify the user briefly that they were added to a group
+      try {
+        const groupName = group?.name || "a group";
+        // clickable toast: when clicked, select the group chat
+        toast.success((t) => React.createElement(
+          "div",
+          {
+            style: { cursor: "pointer" },
+            onClick: () => {
+              import("./useChatStore").then((m) => {
+                const setSelectedUser = m.useChatStore?.getState().setSelectedUser;
+                if (setSelectedUser) setSelectedUser({ ...group, isGroup: true });
+              });
+              toast.dismiss(t.id);
+            },
+          },
+          `Added to group ${groupName} — click to open`
+        ));
+      } catch (e) {
+        // Non-fatal: keep going to add the group to the store
+        console.error("Error showing newGroup toast:", e);
+      }
+
+      // Lazy dynamic import to avoid circular deps and keep ESM-compatible
+      import("./useGroupStore").then((m) => {
+        try {
+          const gs = m.useGroupStore.getState();
+          const groups = gs.groups || [];
+          const exists = groups.some((g) => String(g._id) === String(group._id));
+          if (exists) return; // already present (e.g., we added it locally after create)
+          const addGroup = gs.addGroup;
+          if (addGroup) addGroup(group);
+        } catch (err) {
+          console.error("Error handling incoming group in socket handler:", err);
+        }
+      }).catch((e) => {
+        console.error("Error adding incoming group to store:", e);
+      });
     });
   },
   disconnectSocket: () => {
