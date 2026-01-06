@@ -34,6 +34,15 @@ const messageSchema = new mongoose.Schema(
     tag: {
       type: String,
     },
+    meta: {
+      language: { type: String },
+      matches: [
+        {
+          level: { type: String },
+          keyword: { type: String },
+        },
+      ],
+    },
     isFlagged: {
       type: Boolean,
       required: true,
@@ -41,8 +50,8 @@ const messageSchema = new mongoose.Schema(
     },
     severity: {
       type: String,
-      enum: ["High", "Medium", "Low"],
-      default: "Low",
+      enum: ["high", "medium", "low"],
+      default: null,
     },
   },
   { timestamps: true }

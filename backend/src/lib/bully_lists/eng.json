@@ -1,0 +1,28 @@
+{
+  "high": [
+    "kill",
+    "i will kill you",
+    "i will hurt you",
+    "suicide",
+    "die",
+    "you're dead",
+    "i'll beat you"
+  ],
+  "medium": [
+    "idiot",
+    "stupid",
+    "moron",
+    "bastard",
+    "asshole",
+    "racist",
+    "hate you",
+    "kill yourself"
+  ],
+  "low": [
+    "nerd",
+    "geek",
+    "loser",
+    "get lost",
+    "go away"
+  ]
+}

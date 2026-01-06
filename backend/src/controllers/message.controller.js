@@ -5,7 +5,11 @@ import Group from "../models/group.model.js";
 import Message from "../models/message.model.js";
 
 import { getReceiverSocketId, io } from "../lib/socket.js";
-import { containsBullying, encryptMessage, decryptMessage } from "../lib/messageCrypto.js";
+import { encryptMessage, decryptMessage, isKeyConfigured } from "../lib/messageCrypto.js";
+import { detectBullying } from "../lib/bullyDetector.js";
+import { recordFlag, resetCounts } from "../lib/repetitionDetector.js";
+import { isTrustedPair } from "../lib/trust.js";
+import { createAlert } from "./moderator.controller.js";
 
 export const getUsersForSidebar = async (req, res) => {
   try {
@@ -85,58 +89,25 @@ export const sendMessage = async (req, res) => {
     const senderId = req.user._id;
 
     let messageData;
-    let isFlagged = false;
-    let severity = "Low";
-    const lower = text.toLowerCase();
-    // High severity: threats, hate speech, suicide, violence
-    const highKeywords = [
-      "kill", "dead", "die", "suicide", "hurt", "smash", "beat", "terrorist", "racist", "slave", "nazi", "hitler", "hate", "drop dead", "go die", "watch your back", "regret", "break your face", "break you", "smash your head", "beat you up",
-      // Threats
-      "i will hurt you", "i will kill you", "kill your self", "watch your back", "you'll regret this",
-      "you're dead", "i'll beat you", "i'll smash you", "break your face",
-      "i'll break you", "beat you up", "smash your head",
-            // Hate speech: religion
-      "islamophobe", "muslim terrorist", "fake jew", "christfag", "catholic dog",
-      "infidel", "heathen scum",
-    ];
-    // Medium severity: insults, profanity, harassment, body shaming
-    const mediumKeywords = [
-      "idiot", "stupid", "loser", "dumb", "moron", "fool", "clown", "jerk", "useless", "pathetic", "worthless", "failure", "trash", "garbage", "crybaby", "weakling", "coward", "pig", "dog", "rat", "snake", "fatty", "ugly", "mad", "obese", "disgusting", "gross", "fatso", "skinny", "toothpick", "stick", "string bean", "bony", "skeleton", "brain dead", "slow", "retard", "retarded", "dimwit", "halfwit", "simpleton", "pea brain", "empty head", "blockhead", "airhead", "bitch", "bastard", "asshole", "dick", "prick", "slut", "whore", "hoe", "tramp", "skank", "scumbag", "jackass", "punk", "douche", "douchebag"
-      // Profanity / derogatory terms
-      ,"bitch", "bastard", "asshole", "dick", "prick", "slut", "whore", "hoe",
-      "tramp", "skank", "scumbag", "jackass", "punk", "douche", "douchebag",
-    ];
-    // Low severity: school-specific, mild teasing, annoying
-    const lowKeywords = [
-      "nerd", "geek", "teacher's pet", "loser face", "four eyes", "know-it-all", "brown noser", "tattletale", "crybaby", "mad", "annoying", "no one cares", "get lost", "go away forever"
-        // Bullying
-      ,"idiot", "stupid", "loser", "dumb", "moron", "fool", "clown", "jerk", "useless", 
-      "kill yourself", "pathetic", "worthless", "failure", "trash", "garbage", "nerd", "geek", 
-      "crybaby", "weakling", "coward", "fatty", "ugly", "mad",
-    ];
-
-    // Check for severity and flag only if keyword matches
-    let matchedSeverity = null;
-    if (highKeywords.some(word => lower.includes(word))) {
-      matchedSeverity = "High";
-    } else if (mediumKeywords.some(word => lower.includes(word))) {
-      matchedSeverity = "Medium";
-    } else if (lowKeywords.some(word => lower.includes(word))) {
-      matchedSeverity = "Low";
-    }
-
-    if (matchedSeverity) {
-      // Store flagged (bully) message as plaintext
+    const detection = detectBullying(text);
+    let repetitionResult = null;
+    if (detection.isBullying) {
+      // record repetition for sender->receiver (or group)
+      repetitionResult = recordFlag({ senderId, receiverId, groupId, timestamp: new Date() });
       messageData = {
         senderId,
         receiverId,
         groupId: groupId || undefined,
         text,
         isFlagged: true,
-        severity: matchedSeverity,
+        severity: repetitionResult.severity || detection.severity,
+        meta: { language: detection.language, matches: detection.matched, repetition: repetitionResult }
       };
     } else {
-      // Store normal message as encrypted
+      // ensure encryption key configured before encrypting
+      if (!isKeyConfigured()) {
+        return res.status(400).json({ error: "Server misconfiguration: MESSAGE_SECRET_KEY not set" });
+      }
       const { ciphertext, iv, tag } = encryptMessage(text);
       messageData = {
         senderId,
@@ -146,7 +117,7 @@ export const sendMessage = async (req, res) => {
         iv,
         tag,
         isFlagged: false,
-        severity: "Low",
+        severity: null,
       };
     }
 
@@ -213,6 +184,64 @@ export const sendMessage = async (req, res) => {
       }
     }
 
+    // Post-save: handle repetition-based actions (warnings/alerts)
+    try {
+      if (messageData.isFlagged && messageData.meta && messageData.meta.repetition) {
+        const rep = messageData.meta.repetition;
+
+        // For one-to-one messages, check trust; for groups skip trust
+        let trusted = false;
+        try {
+          if (!newMessage.groupId && receiverId) {
+            trusted = await isTrustedPair(senderId.toString(), receiverId.toString());
+          }
+        } catch (e) {
+          trusted = false;
+        }
+
+        // If trusted pair, suppress automated warnings/alerts for low/medium
+        if (trusted && rep.severity !== "high") {
+          // downgrade severity to low and do not alert
+          // keep record for auditing but do not notify
+        } else {
+          // Medium: send a warning to the sender's socket
+          if (rep.severity === "medium") {
+            const senderSocket = getReceiverSocketId(senderId.toString());
+            if (senderSocket) {
+              io.to(senderSocket).emit("userWarning", {
+                message: "Your recent messages have been flagged as potentially abusive. Please stop.",
+                repetitionCount: rep.repetitionCount,
+              });
+            }
+          }
+
+          // High: emit a moderator/teacher alert (broadcast for now)
+          if (rep.shouldAlert) {
+            // persist moderator alert
+            try {
+              const alert = await createAlert({
+                messageId: newMessage._id,
+                senderId,
+                receiverId,
+                groupId: newMessage.groupId,
+                text: newMessage.text,
+                severity: rep.severity,
+                repetitionCount: rep.repetitionCount,
+                meta: messageData.meta,
+                trustedPair: trusted,
+              });
+              // notify moderators in real-time (optional broadcast)
+              io.emit("moderatorAlert", alert);
+            } catch (err) {
+              console.error("failed creating moderator alert", err.message);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Error handling repetition actions:", err.message);
+    }
+
     res.status(201).json(responseMessage);
   } catch (error) {
     console.log("Error in sendMessage controller: ", error.message);
@@ -263,5 +292,61 @@ export const markRead = async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ ok: false });
+  }
+};
+
+export const checkMessage = async (req, res) => {
+  try {
+    const { text } = req.body;
+    const result = detectBullying(text);
+    // normalize output to frontend spec
+    const out = {
+      isBullying: !!result.isBullying,
+      detectedLanguage: result.detectedLanguage || (result.language ? [result.language] : []),
+      flaggedWords: (result.flaggedWords || []).map(f => ({ word: f.word, language: f.language })),
+      severity: (result.severity || "low").toLowerCase(),
+    };
+    res.status(200).json(out);
+  } catch (e) {
+    console.error("Error in checkMessage: ", e.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+export const postFeedback = async (req, res) => {
+  try {
+    const { id: messageId } = req.params;
+    const { type } = req.body; // e.g., 'joke'
+    // simple: if 'joke', dismiss related moderator alerts and reset repetition counts
+    if (type === "joke") {
+      // find moderator alerts for this message and mark dismissed
+      try {
+        const ModeratorAlert = (await import("../models/moderatorAlert.model.js")).default;
+        const alerts = await ModeratorAlert.find({ messageId });
+        for (const a of alerts) {
+          a.status = "dismissed";
+          await a.save();
+        }
+      } catch (e) {
+        console.error("feedback dismiss alerts error", e.message);
+      }
+
+      // reset repetition counts for sender->receiver
+      try {
+        const msg = await Message.findById(messageId);
+        if (msg) {
+          await resetCounts({ senderId: msg.senderId, receiverId: msg.receiverId, groupId: msg.groupId });
+        }
+      } catch (e) {
+        console.error("feedback resetCounts error", e.message);
+      }
+
+      return res.status(200).json({ ok: true });
+    }
+
+    res.status(400).json({ error: "Unknown feedback type" });
+  } catch (e) {
+    console.error("postFeedback", e.message);
+    res.status(500).json({ error: "Internal server error" });
   }
 };

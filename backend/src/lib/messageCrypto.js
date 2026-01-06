@@ -93,3 +93,7 @@ export function decryptMessage(ciphertext, iv, tag) {
     throw new Error("Failed to decrypt message. Data may be corrupted or key/IV/tag mismatch.");
   }
 }
+
+export function isKeyConfigured() {
+  return !!KEY;
+}

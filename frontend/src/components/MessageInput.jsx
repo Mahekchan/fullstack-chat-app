@@ -2,12 +2,15 @@ import { useRef, useState } from "react";
 import { useChatStore } from "../store/useChatStore";
 import { Image, Send, X } from "lucide-react";
 import toast from "react-hot-toast";
+import { axiosInstance } from "../lib/axios";
 
 const MessageInput = () => {
   const [text, setText] = useState("");
   const [imagePreview, setImagePreview] = useState(null);
   const fileInputRef = useRef(null);
   const { sendMessage } = useChatStore();
+  const { selectedUser } = useChatStore();
+  const [preSendModal, setPreSendModal] = useState({ open: false, data: null });
 
   const handleImageChange = (e) => {
     const file = e.target.files[0];
@@ -33,18 +36,46 @@ const MessageInput = () => {
     if (!text.trim() && !imagePreview) return;
 
     try {
-      await sendMessage({
-        text: text.trim(),
-        image: imagePreview,
-      });
+      // Pre-check for bullying / abuse
+      try {
+        const checkBody = { text: text.trim() };
+        if (selectedUser?.isGroup) checkBody.groupId = selectedUser._id;
+        const chk = await axiosInstance.post("/messages/check", checkBody);
+        if (chk?.data?.isBullying) {
+          // open modal to allow user to edit or send
+          setPreSendModal({ open: true, data: chk.data });
+          return;
+        }
+      } catch (err) {
+        // if check fails, allow sending but show small toast
+        toast.error("Warning: pre-send check failed; message will be sent.");
+      }
 
-      // Clear form
-      setText("");
-      setImagePreview(null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      await doSend();
     } catch (error) {
       console.error("Failed to send message:", error);
+      toast.error("Failed to send message");
     }
+  };
+
+  const doSend = async () => {
+    await sendMessage({ text: text.trim(), image: imagePreview });
+    setText("");
+    setImagePreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleModalSend = async () => {
+    setPreSendModal({ open: false, data: null });
+    try {
+      await doSend();
+    } catch (err) {
+      toast.error("Failed to send message");
+    }
+  };
+
+  const handleModalEdit = () => {
+    setPreSendModal({ open: false, data: null });
   };
 
   return (
@@ -103,6 +134,20 @@ const MessageInput = () => {
           <Send size={22} />
         </button>
       </form>
+      {preSendModal.open && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-base-100 rounded-md p-4 w-11/12 max-w-md">
+            <h3 className="font-semibold mb-2">Warning: Message flagged</h3>
+            <p className="text-sm mb-2">Severity: {preSendModal.data.severity}</p>
+            <p className="text-sm mb-4">Flagged words: {preSendModal.data.flaggedWords.map(f => f.word).join(", ")}</p>
+            <div className="flex gap-2 justify-end">
+              <button className="btn btn-sm" onClick={handleModalEdit}>Edit</button>
+              <button className="btn btn-sm btn-ghost" onClick={() => { setPreSendModal({ open: false, data: null }); }}>Cancel</button>
+              <button className="btn btn-sm btn-primary" onClick={handleModalSend}>Send Anyway</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

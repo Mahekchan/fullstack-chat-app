@@ -1,4 +1,5 @@
 import { useChatStore } from "../store/useChatStore";
+// removed joke-feedback button; no axios/toast needed here
 import { useEffect, useRef } from "react";
 
 import ChatHeader from "./ChatHeader";
@@ -65,7 +66,7 @@ const ChatContainer = () => {
                 </div>
               </div>
               <div className="chat-header mb-1">
-                {!isMe && <div className="text-sm font-medium">{senderName}</div>}
+                {!isMe && selectedUser?.isGroup && <div className="text-sm font-medium">{senderName}</div>}
                 <div className="flex items-center gap-2">
                   <time className="text-xs opacity-50 ml-1">{formatMessageTime(message.createdAt)}</time>
                   {isMe && message.deliveredTo && (
@@ -81,6 +82,7 @@ const ChatContainer = () => {
                   <img src={message.image} alt="Attachment" className="sm:max-w-[200px] rounded-md mb-2" />
                 )}
                 {message.text && <p>{message.text}</p>}
+                {/* joke feedback removed per request */}
               </div>
             </div>
           );
