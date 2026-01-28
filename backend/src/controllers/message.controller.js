@@ -69,8 +69,11 @@ export const getMessages = async (req, res) => {
         groupId: msg.groupId,
         text,
         isFlagged: msg.isFlagged,
+        deliveredTo: (msg.deliveredTo || []).map(d => d.toString()),
+        readBy: (msg.readBy || []).map(r => r.toString()),
         createdAt: msg.createdAt,
         updatedAt: msg.updatedAt,
+        isDeleted: msg.isDeleted,
         __v: msg.__v,
       };
   }));
@@ -100,7 +103,7 @@ export const sendMessage = async (req, res) => {
         groupId: groupId || undefined,
         text,
         isFlagged: true,
-        severity: repetitionResult.severity || detection.severity,
+        severity: detection.severity,
         meta: { language: detection.language, matches: detection.matched, repetition: repetitionResult }
       };
     } else {
@@ -152,6 +155,8 @@ export const sendMessage = async (req, res) => {
       groupId: newMessage.groupId,
       text: messageData.isFlagged ? text : text,
       isFlagged: messageData.isFlagged,
+      deliveredTo: (newMessage.deliveredTo || []).map(d => d.toString()),
+      readBy: (newMessage.readBy || []).map(r => r.toString()),
       createdAt: newMessage.createdAt,
       updatedAt: newMessage.updatedAt,
       __v: newMessage.__v,
@@ -259,9 +264,23 @@ export const markDelivered = async (req, res) => {
     // notify sender about delivery
     const msg = await Message.findById(messageId);
     if (msg) {
-      const senderSocket = getReceiverSocketId(msg.senderId.toString());
-      if (senderSocket) {
-        io.to(senderSocket).emit("messageDelivered", { messageId, userId });
+      // If it's a group message, notify all group members so everyone can update statuses
+      if (msg.groupId) {
+        const group = await Group.findById(msg.groupId).select("members");
+        if (group && group.members && group.members.length) {
+          for (const memberId of group.members) {
+            const socketId = getReceiverSocketId(memberId.toString());
+            if (socketId) {
+              io.to(socketId).emit("messageDelivered", { messageId, userId });
+            }
+          }
+        }
+      } else {
+        // one-to-one: notify sender (and receiver if connected)
+        const senderSocket = getReceiverSocketId(msg.senderId.toString());
+        if (senderSocket) io.to(senderSocket).emit("messageDelivered", { messageId, userId });
+        const receiverSocket = getReceiverSocketId(msg.receiverId?.toString());
+        if (receiverSocket) io.to(receiverSocket).emit("messageDelivered", { messageId, userId });
       }
     }
 
@@ -282,9 +301,23 @@ export const markRead = async (req, res) => {
     // notify sender about read
     const msg = await Message.findById(messageId);
     if (msg) {
-      const senderSocket = getReceiverSocketId(msg.senderId.toString());
-      if (senderSocket) {
-        io.to(senderSocket).emit("messageRead", { messageId, userId });
+      // If it's a group message, notify all group members so everyone can update statuses
+      if (msg.groupId) {
+        const group = await Group.findById(msg.groupId).select("members");
+        if (group && group.members && group.members.length) {
+          for (const memberId of group.members) {
+            const socketId = getReceiverSocketId(memberId.toString());
+            if (socketId) {
+              io.to(socketId).emit("messageRead", { messageId, userId });
+            }
+          }
+        }
+      } else {
+        // one-to-one: notify sender (and receiver if connected)
+        const senderSocket = getReceiverSocketId(msg.senderId.toString());
+        if (senderSocket) io.to(senderSocket).emit("messageRead", { messageId, userId });
+        const receiverSocket = getReceiverSocketId(msg.receiverId?.toString());
+        if (receiverSocket) io.to(receiverSocket).emit("messageRead", { messageId, userId });
       }
     }
 
@@ -347,6 +380,50 @@ export const postFeedback = async (req, res) => {
     res.status(400).json({ error: "Unknown feedback type" });
   } catch (e) {
     console.error("postFeedback", e.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+export const deleteMessage = async (req, res) => {
+  try {
+    const { id: messageId } = req.params;
+    const userId = req.user._id;
+
+    const message = await Message.findById(messageId);
+    if (!message) {
+      return res.status(404).json({ error: "Message not found" });
+    }
+
+    // Only the sender can delete their own message
+    if (message.senderId.toString() !== userId.toString()) {
+      return res.status(403).json({ error: "You can only delete your own messages" });
+    }
+
+    // Soft delete: mark as deleted
+    const updatedMessage = await Message.findByIdAndUpdate(messageId, { isDeleted: true }, { new: true });
+
+    // Notify all participants via socket with the updated message
+    if (message.groupId) {
+      const group = await Group.findById(message.groupId).select("members");
+      if (group && group.members && group.members.length) {
+        for (const memberId of group.members) {
+          const socketId = getReceiverSocketId(memberId.toString());
+          if (socketId) {
+            io.to(socketId).emit("messageUpdated", { messageId, isDeleted: true });
+          }
+        }
+      }
+    } else {
+      // one-to-one: notify both sender and receiver
+      const senderSocket = getReceiverSocketId(message.senderId.toString());
+      if (senderSocket) io.to(senderSocket).emit("messageUpdated", { messageId, isDeleted: true });
+      const receiverSocket = getReceiverSocketId(message.receiverId?.toString());
+      if (receiverSocket) io.to(receiverSocket).emit("messageUpdated", { messageId, isDeleted: true });
+    }
+
+    res.status(200).json({ ok: true, messageId });
+  } catch (e) {
+    console.error("Error in deleteMessage:", e.message);
     res.status(500).json({ error: "Internal server error" });
   }
 };

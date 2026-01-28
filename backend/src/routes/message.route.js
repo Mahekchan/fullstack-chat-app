@@ -1,6 +1,6 @@
 import express from "express";
 import { protectRoute } from "../middleware/auth.middleware.js";
-import { getMessages, getUsersForSidebar, sendMessage, markDelivered, markRead, checkMessage, postFeedback } from "../controllers/message.controller.js";
+import { getMessages, getUsersForSidebar, sendMessage, markDelivered, markRead, checkMessage, postFeedback, deleteMessage } from "../controllers/message.controller.js";
 
 const router = express.Router();
 
@@ -12,5 +12,6 @@ router.post("/check", protectRoute, checkMessage);
 router.post("/:id/feedback", protectRoute, postFeedback);
 router.post("/:id/delivered", protectRoute, markDelivered);
 router.post("/:id/read", protectRoute, markRead);
+router.delete("/:id", protectRoute, deleteMessage);
 
 export default router;

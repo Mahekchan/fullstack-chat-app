@@ -40,6 +40,7 @@ const messageSchema = new mongoose.Schema(
         {
           level: { type: String },
           keyword: { type: String },
+          meaning: { type: String },
         },
       ],
     },
@@ -52,6 +53,10 @@ const messageSchema = new mongoose.Schema(
       type: String,
       enum: ["high", "medium", "low"],
       default: null,
+    },
+    isDeleted: {
+      type: Boolean,
+      default: false,
     },
   },
   { timestamps: true }

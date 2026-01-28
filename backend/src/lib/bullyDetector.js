@@ -48,6 +48,20 @@ function normalizeText(s) {
 
 const SUPPORTED_LANGS = ["eng", "hin", "hing", "mar", "tam", "tel"];
 
+function loadMeanings() {
+  try {
+    const filePath = path.join(listsDir, `meanings.json`);
+    if (fs.existsSync(filePath)) {
+      return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    }
+  } catch (e) {
+    // ignore
+  }
+  return {};
+}
+
+const MEANINGS = loadMeanings();
+
 export function detectBullying(text) {
   if (!text || typeof text !== "string") {
     return { isBullying: false, detectedLanguage: [], flaggedWords: [], severity: "low", language: "und", matched: [] };
@@ -107,16 +121,54 @@ export function detectBullying(text) {
       if (!kw) continue;
       const nkw = normalizeText(kw);
       const isLatin = /^[a-z0-9\s']+$/i.test(nkw);
-      if (((isLatin && new RegExp("\\b" + escapeRegExp(nkw) + "\\b", "i").test(normalized)) || (!isLatin && normalized.includes(nkw))) && severity === "low") {
+      if ((isLatin && new RegExp("\\b" + escapeRegExp(nkw) + "\\b", "i").test(normalized)) || (!isLatin && normalized.includes(nkw))) {
         matched.push({ level: "Low", keyword: kw, language: lang });
         flaggedWords.push({ word: kw, language: lang });
+        if (severity === "low") severity = "low";
       }
     }
   }
 
-  // detectedLanguage array: include any languages where we found matches, else include franc guess / script hints
-  const detectedSet = new Set();
-  for (const m of matched) detectedSet.add(m.language);
+  // deduplicate matched entries (keyword + language)
+  const uniqueMatchedMap = new Map();
+  for (const m of matched) {
+    const key = `${m.keyword}::${m.language}`;
+    if (!uniqueMatchedMap.has(key)) uniqueMatchedMap.set(key, m);
+  }
+  const uniqueMatched = Array.from(uniqueMatchedMap.values());
+
+  // deduplicate flaggedWords similarly
+  const uniqueFlaggedMap = new Map();
+  for (const f of flaggedWords) {
+    const k = `${f.word}::${f.language}`;
+    if (!uniqueFlaggedMap.has(k)) uniqueFlaggedMap.set(k, f);
+  }
+  const uniqueFlagged = Array.from(uniqueFlaggedMap.values());
+
+  // attach English meanings where available
+  for (const m of uniqueMatched) {
+    try {
+      const langMap = MEANINGS[m.language] || {};
+      const lookupKey = typeof m.keyword === "string" ? m.keyword.toLowerCase() : String(m.keyword).toLowerCase();
+      // normalize lookup: strip punctuation
+      const lk = lookupKey.replace(/["\(\)\[\]\{\],\.\!\?;:@#\$%\^&\*<>\/\\~=+\-]/g, "").trim();
+      m.meaning = langMap[lk] || null;
+    } catch (e) {
+      m.meaning = null;
+    }
+  }
+  for (const f of uniqueFlagged) {
+    try {
+      const langMap = MEANINGS[f.language] || {};
+      const lk = f.word.toLowerCase().replace(/["\(\)\[\]\{\],\.\!\?;:@#\$%\^&\*<>\/\\~=+\-]/g, "").trim();
+      f.meaning = langMap[lk] || null;
+    } catch (e) {
+      f.meaning = null;
+    }
+  }
+
+  // Build detected languages set
+  const detectedSet = new Set(uniqueMatched.map((m) => m.language));
   if (!detectedSet.size) {
     if (hasDevanagari) detectedSet.add("hin");
     if (hasTamil) detectedSet.add("tam");
@@ -125,17 +177,31 @@ export function detectBullying(text) {
     detectedSet.add("eng");
   }
 
+  // Choose preferred language when same keyword appears in multiple lists
+  let preferredLanguage = null;
+  // if text uses Devanagari and any matched keyword is Devanagari, prefer that language
+  const matchedDeva = uniqueMatched.find((m) => /[\u0900-\u097F]/.test(m.keyword));
+  if (hasDevanagari && matchedDeva) {
+    preferredLanguage = matchedDeva.language;
+  }
+  // else prefer franc guess if it's among detected
+  if (!preferredLanguage && francGuess && detectedSet.has(francGuess)) preferredLanguage = francGuess;
+  // else prefer 'hing' for latin/romanized text if present
+  if (!preferredLanguage && languagesConsidered.has("hing") && uniqueMatched.find((m) => m.language === "hing")) {
+    preferredLanguage = "hing";
+  }
+  // fallback to first detected
   const detectedLanguage = Array.from(detectedSet);
+  if (!preferredLanguage) preferredLanguage = detectedLanguage[0] || "und";
 
-  const isBullying = matched.length > 0;
+  const isBullying = uniqueMatched.length > 0;
 
   return {
     isBullying,
     detectedLanguage,
-    flaggedWords,
+    flaggedWords: uniqueFlagged,
     severity: severity,
-    // backward compatibility for existing callers
-    language: detectedLanguage[0] || "und",
-    matched,
+    language: preferredLanguage,
+    matched: uniqueMatched,
   };
 }
