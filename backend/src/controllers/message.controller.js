@@ -346,6 +346,61 @@ export const checkMessage = async (req, res) => {
   }
 };
 
+export const rephraseMessage = async (req, res) => {
+  try {
+    const { text } = req.body;
+    
+    if (!text || !text.trim()) {
+      return res.status(400).json({ error: "Text is required" });
+    }
+
+    // Simple rephrase strategy: convert detected bullying language to neutral alternatives
+    const detection = detectBullying(text);
+    
+    if (!detection.isBullying) {
+      return res.status(200).json({ rephrasedText: text });
+    }
+
+    let rephrasedText = text;
+    const flaggedWords = detection.flaggedWords || [];
+
+    // Replace flagged words with neutral alternatives
+    const replacements = {
+      // English
+      "stupid": "not smart",
+      "dumb": "not bright",
+      "idiot": "thoughtless person",
+      "fool": "silly person",
+      "hate": "dislike",
+      "ugly": "unattractive",
+      "loser": "unsuccessful person",
+      "jerk": "rude person",
+      "imbecile": "unwise person",
+      // Hinglish/Hindi
+      "pagal": "confused",
+      "bewakoof": "unwise",
+      "chutiyo": "foolish ones",
+      "gandu": "inappropriate person",
+      "bhosdi": "[content modified]",
+      // Add more as needed
+    };
+
+    for (const flaggedWord of flaggedWords) {
+      const lowerWord = flaggedWord.word.toLowerCase();
+      const replacement = replacements[lowerWord] || "appropriate content";
+      
+      // Case-insensitive replacement
+      const regex = new RegExp(`\\b${flaggedWord.word}\\b`, 'gi');
+      rephrasedText = rephrasedText.replace(regex, replacement);
+    }
+
+    res.status(200).json({ rephrasedText });
+  } catch (e) {
+    console.error("Error in rephraseMessage: ", e.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
 export const postFeedback = async (req, res) => {
   try {
     const { id: messageId } = req.params;

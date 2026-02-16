@@ -11,6 +11,7 @@ const MessageInput = () => {
   const { sendMessage } = useChatStore();
   const { selectedUser } = useChatStore();
   const [preSendModal, setPreSendModal] = useState({ open: false, data: null });
+  const [isRephrasingLoading, setIsRephrasingLoading] = useState(false);
 
   const handleImageChange = (e) => {
     const file = e.target.files[0];
@@ -78,6 +79,25 @@ const MessageInput = () => {
     setPreSendModal({ open: false, data: null });
   };
 
+  const handleRephrase = async () => {
+    setIsRephrasingLoading(true);
+    try {
+      const response = await axiosInstance.post("/messages/rephrase", {
+        text: text.trim(),
+      });
+      if (response?.data?.rephrasedText) {
+        setText(response.data.rephrasedText);
+        setPreSendModal({ open: false, data: null });
+        toast.success("Message rephrased successfully!");
+      }
+    } catch (err) {
+      console.error("Rephrase error:", err);
+      toast.error("Failed to rephrase message");
+    } finally {
+      setIsRephrasingLoading(false);
+    }
+  };
+
   return (
     <div className="p-4 w-full">
       {imagePreview && (
@@ -140,10 +160,19 @@ const MessageInput = () => {
             <h3 className="font-semibold mb-2">Warning: Message flagged</h3>
             <p className="text-sm mb-2">Severity: {preSendModal.data.severity}</p>
             <p className="text-sm mb-4">Flagged words: {preSendModal.data.flaggedWords.map(f => f.word).join(", ")}</p>
-            <div className="flex gap-2 justify-end">
-              <button className="btn btn-sm" onClick={handleModalEdit}>Edit</button>
-              <button className="btn btn-sm btn-ghost" onClick={() => { setPreSendModal({ open: false, data: null }); }}>Cancel</button>
-              <button className="btn btn-sm btn-primary" onClick={handleModalSend}>Send Anyway</button>
+            <div className="flex flex-col gap-2">
+              <button 
+                className="btn btn-sm btn-info w-full" 
+                onClick={handleRephrase}
+                disabled={isRephrasingLoading}
+              >
+                {isRephrasingLoading ? "Rephrasing..." : "✨ Rephrase Sentence"}
+              </button>
+              <div className="flex gap-2 justify-end">
+                <button className="btn btn-sm" onClick={handleModalEdit}>Edit</button>
+                <button className="btn btn-sm btn-ghost" onClick={() => { setPreSendModal({ open: false, data: null }); }}>Cancel</button>
+                <button className="btn btn-sm btn-primary" onClick={handleModalSend}>Send Anyway</button>
+              </div>
             </div>
           </div>
         </div>
