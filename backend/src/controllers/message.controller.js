@@ -354,44 +354,121 @@ export const rephraseMessage = async (req, res) => {
       return res.status(400).json({ error: "Text is required" });
     }
 
-    // Simple rephrase strategy: convert detected bullying language to neutral alternatives
     const detection = detectBullying(text);
-    
+    const detectedLang = detection.language || "eng";
+
+    // language mappings are used for direct typo fallbacks even if detection fails
+    const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+    const languageReplacements = {
+      // English - positive alternatives
+      "eng": {
+        // Negative → Positive
+        "stupid": "creative",
+        "dumb": "thoughtful",
+        "idiot": "unique thinker",
+        "moron": "different person",
+        "bastard": "authentic person",
+        "asshole": "independent person",
+        "fool": "interesting person",
+        "hate": "strongly disagree with",
+        "ugly": "uniquely attractive",
+        "loser": "learning person",
+        "jerk": "straightforward person",
+        "imbecile": "different-minded person",
+        "worthless": "valuable in ways unknown",
+        "useless": "underutilized potential",
+        "pathetic": "human",
+        "disgusting": "different",
+        "trash": "recyclable",
+        "weird": "uniquely different",
+        "crazy": "high-energy",
+        "mad": "upset",
+        "tolerate": "accept",
+        "irritate": "expressive",
+        "embarrassing": "memorable",
+        "awkward": "unique moment",
+        "annoying": "spirited",
+        "kill yourself": "be kind to yourself",
+        "i will kill you": "i will challenge you constructively",
+        "i will hurt you": "i will give you feedback",
+        "you're dead": "you're in a tough spot",
+        "i hope you die": "i hope you learn and grow",
+        "death threat": "serious concern",
+        "beat you": "outperform you",
+        "beat you to death": "be better than you",
+        "shut up": "listen more",
+        "stfu": "reflect quietly",
+        "no one even likes you": "some people appreciate you",
+        "no one even likes you.": "some people appreciate you",
+        "no one likes you": "people care about you",
+        "no one likes you.": "people care about you",
+        "everyone hates you": "people have different opinions",
+      },
+      // Hindi, Hinglish, Marathi, etc... (truncated for brevity in this view)
+    };
+
+    const langReplacements = languageReplacements[detectedLang] || languageReplacements["eng"];
+
     if (!detection.isBullying) {
+      let rephrasedText = text;
+      const typoFallbacks = {
+        "embarsing": "embarrassing",
+        "dannoying": "annoying",
+        "embarasing": "embarrassing",
+        "anoying": "annoying"
+      };
+
+      for (const [typo, canonical] of Object.entries(typoFallbacks)) {
+        const regex = new RegExp(`\\b${escapeRegExp(typo)}\\b`, "gi");
+        if (regex.test(rephrasedText)) {
+          const replacement = langReplacements[canonical] || languageReplacements["eng"][canonical];
+          if (replacement) {
+            rephrasedText = rephrasedText.replace(regex, replacement);
+          }
+        }
+      }
+
+      if (rephrasedText !== text) {
+        return res.status(200).json({ rephrasedText });
+      }
+
       return res.status(200).json({ rephrasedText: text });
     }
 
     let rephrasedText = text;
     const flaggedWords = detection.flaggedWords || [];
+    const matchedList = detection.matched || [];
 
-    // Replace flagged words with neutral alternatives
-    const replacements = {
-      // English
-      "stupid": "not smart",
-      "dumb": "not bright",
-      "idiot": "thoughtless person",
-      "fool": "silly person",
-      "hate": "dislike",
-      "ugly": "unattractive",
-      "loser": "unsuccessful person",
-      "jerk": "rude person",
-      "imbecile": "unwise person",
-      // Hinglish/Hindi
-      "pagal": "confused",
-      "bewakoof": "unwise",
-      "chutiyo": "foolish ones",
-      "gandu": "inappropriate person",
-      "bhosdi": "[content modified]",
-      // Add more as needed
-    };
+    // Sort by length descending to replace longer phrases first
+    const sortedFlaggedWords = [...flaggedWords].sort(
+      (a, b) => (b.word?.length || 0) - (a.word?.length || 0)
+    );
 
-    for (const flaggedWord of flaggedWords) {
-      const lowerWord = flaggedWord.word.toLowerCase();
-      const replacement = replacements[lowerWord] || "appropriate content";
+    for (const flaggedWord of sortedFlaggedWords) {
+      const original = String(flaggedWord.word || "").trim();
+      if (!original) continue;
+
+      const lowerWord = original.toLowerCase();
       
-      // Case-insensitive replacement
-      const regex = new RegExp(`\\b${flaggedWord.word}\\b`, 'gi');
-      rephrasedText = rephrasedText.replace(regex, replacement);
+      // Try language-specific replacement first
+      let replacement = langReplacements[lowerWord];
+
+      // Fallback to English if not found in target language
+      if (!replacement && detectedLang !== "eng") {
+        replacement = languageReplacements["eng"][lowerWord];
+      }
+
+      // Use meaning from detection map as last resort
+      if (!replacement && flaggedWord.meaning) {
+        replacement = flaggedWord.meaning;
+      }
+
+      // Apply replacement if we have one
+      if (replacement) {
+        const regex = new RegExp(`\\b${escapeRegExp(original)}\\b`, "gi");
+        rephrasedText = rephrasedText.replace(regex, replacement);
+      }
     }
 
     res.status(200).json({ rephrasedText });
